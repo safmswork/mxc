@@ -17,6 +17,27 @@
 
 use crate::mxc_common::models::ContainerPolicy;
 
+/// Reject parent components before a Linux backend orders or mounts policy paths.
+pub(crate) fn validate_mount_paths(policy: &ContainerPolicy) -> Result<(), String> {
+    for (paths, field) in [
+        (&policy.readwrite_paths, "readwritePaths"),
+        (&policy.readonly_paths, "readonlyPaths"),
+        (&policy.denied_paths, "deniedPaths"),
+    ] {
+        for path in paths {
+            // Lexically collapsing ".." can disagree with host symlink resolution.
+            if path.split('/').any(|component| component == "..") {
+                return Err(format!(
+                    "Filesystem path '{}' (filesystem.{field}) contains a '..' segment; \
+                     specify a fully resolved path without '..'.",
+                    crate::mxc_common::config_deserialize::escape_diagnostic_text(path)
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The access intent a resolved mount carries into the backend, mapped from the
 /// policy list the path came from. Ordered least- to most-restrictive so an
 /// exact same-path tie resolves most-restrictive-wins.
@@ -166,6 +187,37 @@ mod tests {
             .iter()
             .map(|mount| (mount.path.as_str(), mount.intent))
             .collect()
+    }
+
+    #[test]
+    fn mount_validation_accepts_linux_names_without_parent_components() {
+        let policy = ContainerPolicy {
+            readwrite_paths: strings(&["/work", "/work/report..txt", "/work/..\\file"]),
+            readonly_paths: strings(&["/tools/./bin", "/tools//lib/", "/tools\\..\\bin"]),
+            denied_paths: strings(&["/work/secret"]),
+            ..Default::default()
+        };
+        assert_eq!(validate_mount_paths(&policy), Ok(()));
+    }
+
+    #[test]
+    fn mount_validation_rejects_parent_components_and_escapes_diagnostics() {
+        for path in [
+            "..",
+            "../work",
+            "/work/../",
+            "/work/a/../b/../",
+            "/work\n/..",
+        ] {
+            let policy = ContainerPolicy {
+                readwrite_paths: strings(&[path]),
+                ..Default::default()
+            };
+            let error = validate_mount_paths(&policy).expect_err("parent component");
+            assert!(error.contains("filesystem.readwritePaths"), "{error}");
+            assert!(error.contains("'..'"), "{error}");
+            assert!(!error.contains('\n'), "{error}");
+        }
     }
 
     /// Test oracle: the effective intent a resolved `plan` assigns to `path` —
