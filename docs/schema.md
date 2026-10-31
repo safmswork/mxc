@@ -387,6 +387,12 @@ The `filesystem` section defines path access policy shared across backends:
 | `readonlyPaths` | string[] | `[]` | Paths the process can read but not write. |
 | `deniedPaths` | string[] | `[]` | Paths the process cannot access at all. |
 
+On Linux, Bubblewrap and LXC reject entries in these lists that contain a `..`
+path segment before creating a sandbox. Supply a fully resolved path without
+`..`. MXC does not remove parent segments automatically because symbolic links
+can change where they lead. This restriction applies to policy paths, not to
+paths used by the contained command.
+
 The ProcessContainer-only `processContainer.filesystem` section contains:
 
 | Field | Type | Default | Description |
